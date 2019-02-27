@@ -178,11 +178,11 @@ OpDecorate %1 LinkageAttributes "foo" Export
             AssembleAndLink({body1, body2, body3}, &linked_binary))
       << GetErrorMessage();
   EXPECT_THAT(GetErrorMessage(),
-              HasSubstr("Too many external references, 2, were found "
+              HasSubstr("Too many matching external references (2) were found "
                         "for \"foo\"."));
 }
 
-TEST_F(MatchingImportsToExports, SameNameDifferentTypes) {
+TEST_F(MatchingImportsToExports, SameNameDifferentTypesOneMatch) {
   const std::string body1 = R"(
 OpCapability Linkage
 OpDecorate %1 LinkageAttributes "foo" Import
@@ -204,14 +204,60 @@ OpDecorate %1 LinkageAttributes "foo" Export
 %3 = OpConstant %2 12
 %1 = OpVariable %2 Uniform %3
 )";
+  spvtest::Binary linked_binary;
+  EXPECT_EQ(SPV_SUCCESS, AssembleAndLink({body1, body2, body3}, &linked_binary))
+      << GetErrorMessage();
 
+  const std::string expected_res =
+      R"(OpModuleProcessed "Linked by SPIR-V Tools Linker"
+%1 = OpTypeFloat 32
+%2 = OpVariable %1 Input
+%3 = OpTypeInt 32 0
+%4 = OpConstant %3 42
+%5 = OpVariable %3 Uniform %4
+%6 = OpConstant %1 12
+%7 = OpVariable %1 Uniform %6
+)";
+  std::string res_body;
+  SetDisassembleOptions(SPV_BINARY_TO_TEXT_OPTION_NO_HEADER);
+  EXPECT_EQ(SPV_SUCCESS, Disassemble(linked_binary, &res_body))
+      << GetErrorMessage();
+  EXPECT_EQ(expected_res, res_body);
+}
+
+TEST_F(MatchingImportsToExports, SameNameDifferentTypesNoMatch) {
+  const std::string body1 = R"(
+OpCapability Linkage
+OpDecorate %1 LinkageAttributes "foo" Import
+%2 = OpTypeFloat 32
+%1 = OpVariable %2 Uniform
+%3 = OpVariable %2 Input
+)";
+  const std::string body2 = R"(
+OpCapability Linkage
+OpDecorate %1 LinkageAttributes "foo" Export
+%2 = OpTypeInt 32 0
+%3 = OpConstant %2 42
+%1 = OpVariable %2 Uniform %3
+)";
+  const std::string body3 = R"(
+OpCapability Linkage
+OpDecorate %1 LinkageAttributes "foo" Export
+%2 = OpTypeFloat 16
+%3 = OpConstant %2 12
+%1 = OpVariable %2 Uniform %3
+)";
   spvtest::Binary linked_binary;
   EXPECT_EQ(SPV_ERROR_INVALID_BINARY,
             AssembleAndLink({body1, body2, body3}, &linked_binary))
       << GetErrorMessage();
-  EXPECT_THAT(GetErrorMessage(),
-              HasSubstr("Too many external references, 2, were found "
-                        "for \"foo\"."));
+  EXPECT_THAT(
+      GetErrorMessage(),
+      HasSubstr("No reference matching \"foo\"'s type was found:\n"
+                "\tType mismatch on symbol \"foo\" between imported variable"
+                "/function %1 and exported variable/function %4.\n"
+                "\tType mismatch on symbol \"foo\" between imported variable"
+                "/function %1 and exported variable/function %7.\n"));
 }
 
 TEST_F(MatchingImportsToExports, DecorationMismatch) {

@@ -115,17 +115,19 @@ spv_result_t GetImportExportPairs(const MessageConsumer& consumer,
                                   const opt::IRContext& linked_context,
                                   const DefUseManager& def_use_manager,
                                   const DecorationManager& decoration_manager,
+                                  const TypeManager& type_manager,
                                   bool allow_partial_linkage,
                                   LinkageTable* linkings_to_do);
 
-// Checks that for each pair of import and export, the import and export have
-// the same type as well as the same decorations.
+// Checks that a pair of import and export have the same type as well as the
+// same decorations.
 //
 // TODO(pierremoreau): Decorations on functions parameters are currently not
 // checked.
-spv_result_t CheckImportExportCompatibility(const MessageConsumer& consumer,
-                                            const LinkageTable& linkings_to_do,
-                                            opt::IRContext* context);
+spv_result_t CheckImportExportCompatibility(
+    const DecorationManager& decoration_manager,
+    const TypeManager& type_manager, const LinkageSymbolInfo& imported_symbol,
+    const LinkageSymbolInfo& exported_symbol, std::string* err);
 
 // Remove linkage specific instructions, such as prototypes of imported
 // functions, declarations of imported variables, import (and export if
@@ -376,6 +378,7 @@ spv_result_t GetImportExportPairs(const MessageConsumer& consumer,
                                   const opt::IRContext& linked_context,
                                   const DefUseManager& def_use_manager,
                                   const DecorationManager& decoration_manager,
+                                  const TypeManager& type_manager,
                                   bool allow_partial_linkage,
                                   LinkageTable* linkings_to_do) {
   spv_position_t position = {};
@@ -457,58 +460,69 @@ spv_result_t GetImportExportPairs(const MessageConsumer& consumer,
     if (possible_exports.empty() && !allow_partial_linkage)
       return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
              << "Unresolved external reference to \"" << import.name << "\".";
-    else if (possible_exports.size() > 1u)
-      return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
-             << "Too many external references, " << possible_exports.size()
-             << ", were found for \"" << import.name << "\".";
+    else if (possible_exports.empty())
+      continue;
 
-    if (!possible_exports.empty())
-      linkings_to_do->emplace_back(import, possible_exports.front());
+    std::string err = "\t";
+    std::vector<const LinkageSymbolInfo*> valid_exports;
+    for (const auto& possible_export : exp->second) {
+      if (CheckImportExportCompatibility(decoration_manager, type_manager,
+                                         import, possible_export,
+                                         &err) == SPV_SUCCESS)
+        valid_exports.push_back(&possible_export);
+      else
+        err += "\n\t";
+    }
+
+    if (valid_exports.empty())
+      return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
+             << "No reference matching \"" << import.name
+             << "\"'s type was found:\n"
+             << err.substr(0, err.size() - 1);
+    else if (valid_exports.size() > 1)
+      return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
+             << "Too many matching external references ("
+             << valid_exports.size() << ") were found for \"" << import.name
+             << "\".";
+
+    linkings_to_do->emplace_back(import, *valid_exports.front());
   }
 
   return SPV_SUCCESS;
 }
 
-spv_result_t CheckImportExportCompatibility(const MessageConsumer& consumer,
-                                            const LinkageTable& linkings_to_do,
-                                            opt::IRContext* context) {
-  spv_position_t position = {};
-
+spv_result_t CheckImportExportCompatibility(
+    const DecorationManager& decoration_manager,
+    const TypeManager& type_manager, const LinkageSymbolInfo& imported_symbol,
+    const LinkageSymbolInfo& exported_symbol, std::string* err) {
   // Ensure the import and export types are the same.
-  const DecorationManager& decoration_manager = *context->get_decoration_mgr();
-  const TypeManager& type_manager = *context->get_type_mgr();
-  for (const auto& linking_entry : linkings_to_do) {
-    Type* imported_symbol_type =
-        type_manager.GetType(linking_entry.imported_symbol.type_id);
-    Type* exported_symbol_type =
-        type_manager.GetType(linking_entry.exported_symbol.type_id);
-    if (!(*imported_symbol_type == *exported_symbol_type))
-      return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
-             << "Type mismatch on symbol \""
-             << linking_entry.imported_symbol.name
-             << "\" between imported variable/function %"
-             << linking_entry.imported_symbol.id
-             << " and exported variable/function %"
-             << linking_entry.exported_symbol.id << ".";
+  Type* imported_symbol_type = type_manager.GetType(imported_symbol.type_id);
+  Type* exported_symbol_type = type_manager.GetType(exported_symbol.type_id);
+  if (!(*imported_symbol_type == *exported_symbol_type)) {
+    *err += "Type mismatch on symbol \"" + imported_symbol.name +
+            "\" between imported variable/function %" +
+            std::to_string(imported_symbol.id) +
+            " and exported variable/function %" +
+            std::to_string(exported_symbol.id) + ".";
+    return SPV_ERROR_INVALID_BINARY;
   }
 
   // Ensure the import and export decorations are similar
-  for (const auto& linking_entry : linkings_to_do) {
-    if (!decoration_manager.HaveTheSameDecorations(
-            linking_entry.imported_symbol.id, linking_entry.exported_symbol.id))
-      return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_BINARY)
-             << "Decorations mismatch on symbol \""
-             << linking_entry.imported_symbol.name
-             << "\" between imported variable/function %"
-             << linking_entry.imported_symbol.id
-             << " and exported variable/function %"
-             << linking_entry.exported_symbol.id << ".";
-    // TODO(pierremoreau): Decorations on function parameters should probably
-    //                     match, except for FuncParamAttr if I understand the
-    //                     spec correctly.
-    // TODO(pierremoreau): Decorations on the function return type should
-    //                     match, except for FuncParamAttr.
+  if (!decoration_manager.HaveTheSameDecorations(imported_symbol.id,
+                                                 exported_symbol.id)) {
+    *err += "Decoration mismatch on symbol \"" + imported_symbol.name +
+            "\" between imported variable/function %" +
+            std::to_string(imported_symbol.id) +
+            " and exported variable/function %" +
+            std::to_string(exported_symbol.id) + ".";
+    return SPV_ERROR_INVALID_BINARY;
   }
+
+  // TODO(pierremoreau): Decorations on function parameters should probably
+  //                     match, except for FuncParamAttr if I understand the
+  //                     spec correctly.
+  // TODO(pierremoreau): Decorations on the function return type should
+  //                     match, except for FuncParamAttr.
 
   return SPV_SUCCESS;
 }
@@ -728,42 +742,37 @@ spv_result_t Link(const Context& context, const uint32_t* const* binaries,
 
   // Phase 4: Find the import/export pairs
   LinkageTable linkings_to_do;
-  res = GetImportExportPairs(consumer, linked_context,
-                             *linked_context.get_def_use_mgr(),
-                             *linked_context.get_decoration_mgr(),
-                             options.GetAllowPartialLinkage(), &linkings_to_do);
+  res = GetImportExportPairs(
+      consumer, linked_context, *linked_context.get_def_use_mgr(),
+      *linked_context.get_decoration_mgr(), *linked_context.get_type_mgr(),
+      options.GetAllowPartialLinkage(), &linkings_to_do);
   if (res != SPV_SUCCESS) return res;
 
-  // Phase 5: Ensure the import and export have the same types and decorations.
-  res =
-      CheckImportExportCompatibility(consumer, linkings_to_do, &linked_context);
-  if (res != SPV_SUCCESS) return res;
-
-  // Phase 6: Remove duplicates
+  // Phase 5: Remove duplicates
   PassManager manager;
   manager.SetMessageConsumer(consumer);
   manager.AddPass<RemoveDuplicatesPass>();
   opt::Pass::Status pass_res = manager.Run(&linked_context);
   if (pass_res == opt::Pass::Status::Failure) return SPV_ERROR_INVALID_DATA;
 
-  // Phase 7: Rematch import variables/functions to export variables/functions
+  // Phase 6: Rematch import variables/functions to export variables/functions
   for (const auto& linking_entry : linkings_to_do)
     linked_context.ReplaceAllUsesWith(linking_entry.imported_symbol.id,
                                       linking_entry.exported_symbol.id);
 
-  // Phase 8: Remove linkage specific instructions, such as import/export
+  // Phase 7: Remove linkage specific instructions, such as import/export
   // attributes, linkage capability, etc. if applicable
   res = RemoveLinkageSpecificInstructions(consumer, options, linkings_to_do,
                                           linked_context.get_decoration_mgr(),
                                           &linked_context);
   if (res != SPV_SUCCESS) return res;
 
-  // Phase 9: Compact the IDs used in the module
+  // Phase 8: Compact the IDs used in the module
   manager.AddPass<opt::CompactIdsPass>();
   pass_res = manager.Run(&linked_context);
   if (pass_res == opt::Pass::Status::Failure) return SPV_ERROR_INVALID_DATA;
 
-  // Phase 10: Output the module
+  // Phase 9: Output the module
   linked_context.module()->ToBinary(linked_binary, true);
 
   return SPV_SUCCESS;
