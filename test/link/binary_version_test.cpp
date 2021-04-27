@@ -20,6 +20,7 @@
 namespace spvtools {
 namespace {
 
+using ::testing::HasSubstr;
 using BinaryVersion = spvtest::LinkerTest;
 
 TEST_F(BinaryVersion, LinkerChoosesMaxSpirvVersion) {
@@ -51,7 +52,9 @@ TEST_F(BinaryVersion, LinkerChoosesMaxSpirvVersion) {
   spvtest::Binary linked_binary;
 
   ASSERT_EQ(SPV_SUCCESS, Link(binaries, &linked_binary));
-  EXPECT_THAT(GetErrorMessage(), std::string());
+  EXPECT_THAT(GetErrorMessage(),
+              HasSubstr("The modules given to link use different SPIR-V "
+                        "versions:\n\t1.3 1.5 1.1"));
 
   EXPECT_EQ(0x00010500u, linked_binary[1]);
 }

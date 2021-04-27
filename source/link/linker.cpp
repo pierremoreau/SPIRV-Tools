@@ -202,9 +202,28 @@ spv_result_t GenerateHeader(const MessageConsumer& consumer,
     return DiagnosticStream(position, consumer, "", SPV_ERROR_INVALID_DATA)
            << "|max_id_bound| of GenerateHeader should not be null.";
 
-  uint32_t version = 0u;
-  for (const auto& module : modules)
+  bool version_mismatch = false;
+  uint32_t version = modules.front()->version();
+  for (const auto& module : modules) {
+    version_mismatch = version_mismatch || version != module->version();
     version = std::max(version, module->version());
+  }
+
+  if (version_mismatch) {
+    DiagnosticStream warn(position, consumer, "", SPV_WARNING);
+    warn << "The modules given to link use different SPIR-V versions:\n\t";
+    for (const auto& module : modules) {
+      const uint32_t module_version = module->version();
+      warn << SPV_SPIRV_VERSION_MAJOR_PART(module_version) << "."
+           << SPV_SPIRV_VERSION_MINOR_PART(module_version) << " ";
+    }
+    warn << "(in input order)\n"
+         << "The highest version among them ("
+         << SPV_SPIRV_VERSION_MAJOR_PART(version) << "."
+         << SPV_SPIRV_VERSION_MINOR_PART(version)
+         << ") will be used for the linked module, which might result in "
+            "invalid SPIR-V.";
+  }
 
   header->magic_number = SpvMagicNumber;
   header->version = version;
