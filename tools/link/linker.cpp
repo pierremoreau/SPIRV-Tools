@@ -51,9 +51,11 @@ Options (in lexicographical order):
   -h, --help
                Print this help.
   --target-env <env>
-               Set the target environment. Without this flag the target
-               environment defaults to spv1.5. <env> must be one of
-               {%s}
+               Set the environment used for loading the inputs. Without this
+               flag the environment defaults to spv1.5. <env> must be one of
+               {%s}.
+               NOTE: This has no impact on the SPIR-V version used by the
+               linked binary module, nor the version used in each input.
   --verify-ids
                Verify that IDs in the resulting modules are truly unique.
   --version
