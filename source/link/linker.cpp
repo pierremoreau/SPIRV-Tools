@@ -34,6 +34,7 @@
 #include "source/opt/pass_manager.h"
 #include "source/opt/remove_duplicates_pass.h"
 #include "source/opt/type_manager.h"
+#include "source/spirv_constant.h"
 #include "source/spirv_target_env.h"
 #include "source/util/make_unique.h"
 #include "spirv-tools/libspirv.hpp"
@@ -331,7 +332,7 @@ spv_result_t MergeModules(const MessageConsumer& consumer,
 
   // If the generated module uses SPIR-V 1.1 or higher, add an
   // OpModuleProcessed instruction about the linking step.
-  if (linked_module->version() >= 0x10100) {
+  if (linked_module->version() >= SPV_SPIRV_VERSION_WORD(1, 1)) {
     const std::string processed_string("Linked by SPIR-V Tools Linker");
     const auto num_chars = processed_string.size();
     // Compute num words, accommodate the terminating null character.
