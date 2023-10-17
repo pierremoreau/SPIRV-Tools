@@ -191,7 +191,7 @@ spv_result_t ShiftIdsInModules(const MessageConsumer& consumer,
     Module* module = *module_iter;
     module->ForEachInst([&id_offset](Instruction* insn) {
       insn->ForEachId([&id_offset](uint32_t* id) { *id += id_offset; });
-    });
+    }, true);
     id_offset += module->IdBound() - 1u;
 
     // Invalidate the DefUseManager
